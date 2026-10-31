@@ -1,0 +1,159 @@
+name: Build Single Device Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_path:
+        description: 'Device config JSON path in this repo'
+        required: true
+        default: 'configs/a16/OP-ACE-5-6.1.118.json'
+      ksu_options:
+        description: 'KernelSU option JSON, e.g. [{"type":"ksun","hash":"dev"}]'
+        required: true
+        default: '[{"type":"ksun","hash":"dev"}]'
+      susfs_ref:
+        description: 'SUSFS branch/commit (empty = default branch for this kernel)'
+        required: false
+        default: ''
+      optimize_level:
+        description: 'Compiler optimization level'
+        type: choice
+        options: [O2, O3]
+        default: O2
+      clean_build:
+        description: 'Clean build (no ccache)'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable debug mode'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: build-single-${{ github.ref }}-${{ github.event.inputs.config_path }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      op_config_json: ${{ steps.cfg.outputs.op_config_json }}
+      ksu_type: ${{ steps.cfg.outputs.ksu_type }}
+      ksu_sha: ${{ steps.cfg.outputs.ksu_sha }}
+      model: ${{ steps.cfg.outputs.model }}
+      os_version: ${{ steps.cfg.outputs.os_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Resolve inputs
+        id: cfg
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KSU_OPTIONS: ${{ inputs.ksu_options }}
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          set -euo pipefail
+          [ -f "$CONFIG_PATH" ] || { echo "::error::config not found: $CONFIG_PATH"; exit 1; }
+
+          ksu_type=$(echo "$KSU_OPTIONS" | jq -r '.[0].type | ascii_upcase')
+          ksu_hash=$(echo "$KSU_OPTIONS" | jq -r '.[0].hash // empty')
+          if [ -z "$ksu_hash" ]; then
+            if [ "$ksu_type" = "KSUN" ]; then ksu_hash=dev; else ksu_hash=main; fi
+          fi
+          if [ "$ksu_type" = "KSUN" ]; then OWNER=KernelSU-Next; NAME=KernelSU-Next; else OWNER=tiann; NAME=KernelSU; fi
+          if [[ "$ksu_hash" =~ ^[0-9a-f]{40}$ ]]; then
+            ksu_sha="$ksu_hash"
+          else
+            ksu_sha=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$OWNER/$NAME/commits/$ksu_hash" | jq -r .sha)
+          fi
+          echo "KSU type: $ksu_type  ref: $ksu_hash  sha: $ksu_sha"
+
+          model=$(jq -r .model "$CONFIG_PATH")
+          os_version=$(jq -r .os_version "$CONFIG_PATH")
+
+          jq -c --arg t "$ksu_type" --arg h "$ksu_sha" \
+            '. + {ksu_type: $t, ksu_hash: $h} | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)' \
+            "$CONFIG_PATH" > /tmp/op_config.json
+
+          {
+            echo "op_config_json=$(cat /tmp/op_config.json)"
+            echo "ksu_type=$ksu_type"
+            echo "ksu_sha=$ksu_sha"
+            echo "model=$model"
+            echo "os_version=$os_version"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install Minimal Dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential clang lld flex bison \
+            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
+            libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz aria2
+          sudo apt-get clean
+
+      - name: Configure ccache
+        run: |
+          set -euo pipefail
+          CACHE_DIR="${{ github.workspace }}/.ccache"
+          CCACHE_LOG="${{ github.workspace }}/ccache.log"
+          mkdir -p "$CACHE_DIR"
+          SETTINGS=(
+            "CCACHE_DIR=$CACHE_DIR"
+            "CCACHE_MAXSIZE=12G"
+            "CCACHE_COMPILERCHECK=content"
+            "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            "CCACHE_NOHASHDIR=true"
+            "CCACHE_IGNOREOPTIONS=--sysroot*"
+            "CCACHE_COMPRESSION=true"
+            "CCACHE_COMPRESSION_LEVEL=3"
+            "CCACHE_DIRECT=true"
+            "CCACHE_UMASK=002"
+            "CCACHE_LOGFILE=${CCACHE_LOG}"
+            "CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale"
+          )
+          for setting in "${SETTINGS[@]}"; do
+            echo "$setting" >> "$GITHUB_ENV"
+          done
+          ccache --version | head -1
+
+      - name: Build Kernel
+        id: build
+        uses: ./.github/actions/build-kernel
+        with:
+          op_config_json: ${{ needs.prepare.outputs.op_config_json }}
+          ksu_type: ${{ needs.prepare.outputs.ksu_type }}
+          ksu_branch_or_hash: ${{ needs.prepare.outputs.ksu_sha }}
+          susfs_commit_hash_or_branch: ${{ inputs.susfs_ref }}
+          optimize_level: ${{ inputs.optimize_level }}
+          build_timestamp: ''
+          clean: ${{ inputs.clean_build }}
+          debug: ${{ inputs.debug }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build outcome summary
+        if: always()
+        run: |
+          echo "### Build outcome" >> "$GITHUB_STEP_SUMMARY"
+          echo "- device: ${{ needs.prepare.outputs.model }} (${{ needs.prepare.outputs.os_version }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ksu: ${{ needs.prepare.outputs.ksu_type }} @ ${{ needs.prepare.outputs.ksu_sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
