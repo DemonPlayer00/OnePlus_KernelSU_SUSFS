@@ -66,8 +66,8 @@ jobs:
             git clone --depth 1 -b lineage-23.2 \
               https://github.com/LineageOS/android_kernel_oneplus_sm8650-modules ext
           fi
-          python3 - <<'PYEOF'
-          import os, re
+          cat > /tmp/overlay.py <<'PYEOF'
+          import os, re, sys
 
           K = os.path.abspath("kernel")
           E = os.path.abspath("ext")
@@ -109,26 +109,26 @@ jobs:
               if os.path.exists(d):
                   continue
               base = os.path.basename(d)
-              cands = kidx.get(base, []) + eidx.get(base, [])
-              cands = [c for c in cands if c != d]
-              if len(cands) >= 1:
-                  tail = "/".join(d.split("/")[-2:])
-                  pick = next((c for c in cands if c.endswith(tail)), cands[0])
-                  os.makedirs(os.path.dirname(d), exist_ok=True)
-                  if os.path.lexists(d):
-                      if os.path.islink(d):
-                          os.unlink(d)
-                      else:
-                          continue
-                  os.symlink(pick, d)
-                  print("LINK", d, "->", pick)
-              else:
+              cands = [c for c in (kidx.get(base, []) + eidx.get(base, [])) if c != d]
+              if not cands:
                   unresolved.append(d)
+                  continue
+              tail = "/".join(d.split("/")[-2:])
+              pick = next((c for c in cands if c.endswith(tail)), cands[0])
+              os.makedirs(os.path.dirname(d), exist_ok=True)
+              if os.path.lexists(d):
+                  if os.path.islink(d):
+                      os.unlink(d)
+                  else:
+                      continue
+              os.symlink(pick, d)
+              print("LINK", d, "->", pick)
 
           print("unresolved:", len(unresolved))
           for u in unresolved:
               print("  MISS", u)
           PYEOF
+          python3 /tmp/overlay.py
 
       - name: Integrate KernelSU-Next
         run: |
