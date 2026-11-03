@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel
-          key: ksrc-lineage-23.2-${{ github.run_id }}
+          key: ksrc-lineage-23.2-v1
           restore-keys: |
             ksrc-lineage-23.2-
 
@@ -53,10 +53,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-${{ github.run_id }}
+          key: ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-v1
           restore-keys: |
             ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-
             ccache-
+
+      - name: Fetch external modules
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ ! -d ext/.git ]; then
+            git clone --depth 1 -b lineage-23.2 \
+              https://github.com/LineageOS/android_kernel_oneplus_sm8650-modules ext
+          fi
+          ln -sfn "$PWD/ext/oplus/kernel/touchpanel/kernelFwUpdate" kernel/drivers/base/kernelFwUpdate
+          ln -sfn "$PWD/ext/oplus/kernel/touchpanel/touchpanel_notify" kernel/drivers/base/touchpanel_notify
+          ls -l kernel/drivers/base/kernelFwUpdate kernel/drivers/base/touchpanel_notify
 
       - name: Integrate KernelSU-Next
         run: |
