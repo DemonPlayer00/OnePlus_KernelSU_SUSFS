@@ -7,11 +7,20 @@ on:
         description: 'LOCALVERSION pin (must match running kernel)'
         default: '-g311084c0cf6d'
       susfs_ref:
-        description: 'susfs4ksu ref'
-        default: 'master'
+        description: 'susfs4ksu branch'
+        default: 'gki-android14-6.1'
+      ksu_ref:
+        description: 'KernelSU-Next branch'
+        default: 'next'
 
 permissions:
   contents: read
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_SLOPPINESS: time_macros,include_file_ctime,include_file_mtime
+  CCACHE_MAXSIZE: 4G
 
 jobs:
   build:
@@ -22,43 +31,49 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bc bison flex libssl-dev libelf-dev \
-            python3 python3-pip git curl zstd lld llvm clang cpio rsync device-tree-compiler
+            python3 git curl zstd lld llvm clang ccache cpio rsync device-tree-compiler
+
+      - name: Cache kernel source
+        uses: actions/cache@v4
+        with:
+          path: kernel
+          key: ksrc-lineage-23.2-${{ github.run_id }}
+          restore-keys: |
+            ksrc-lineage-23.2-
 
       - name: Clone LineageOS kernel
         run: |
-          git clone --depth 1 -b lineage-23.2 \
-            https://github.com/LineageOS/android_kernel_oneplus_sm8650 kernel
-          cd kernel
-          git rev-parse HEAD
+          if [ ! -d kernel/.git ]; then
+            git clone --depth 1 -b lineage-23.2 \
+              https://github.com/LineageOS/android_kernel_oneplus_sm8650 kernel
+          fi
+          cd kernel && git rev-parse HEAD
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-
+            ccache-
 
       - name: Integrate KernelSU-Next
         run: |
           cd kernel
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next || \
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/master/kernel/setup.sh" | bash -s master
-          grep -n "KSU" Makefile | head -3
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${{ inputs.ksu_ref }}/kernel/setup.sh" | bash -s "${{ inputs.ksu_ref }}" || \
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
       - name: Apply SUSFS patches
         run: |
-          set -x
           cd kernel
-          ok=0
-          for ref in "${{ inputs.susfs_ref }}" main v2.3.0; do
-            rm -rf ../susfs
-            if git clone --depth 1 -b "$ref" https://gitlab.com/simonpunk/susfs4ksu.git ../susfs 2>/dev/null; then
-              echo "cloned gitlab $ref"; ok=1; break
-            fi
-            if curl -fsSL --retry 3 "https://gitlab.com/simonpunk/susfs4ksu/-/archive/$ref/susfs4ksu-$ref.tar.gz" -o /tmp/susfs.tgz; then
-              mkdir -p ../susfs && tar -xzf /tmp/susfs.tgz -C ../susfs --strip-components=1 && echo "tarball $ref"; ok=1; break
-            fi
-          done
-          test "$ok" = 1 || { echo "cannot fetch susfs"; exit 1; }
-          ls ../susfs/kernel_patches | head -40
-          PATCH=$(ls ../susfs/kernel_patches/*6.1*.patch 2>/dev/null | head -1)
-          echo "selected patch: $PATCH"
-          test -n "$PATCH" || { echo "no 6.1 patch"; exit 1; }
-          patch -p1 --forward < "$PATCH" || true
-          grep -rn "KSU_SUSFS" fs/Makefile | head -3
+          rm -rf ../susfs
+          git clone --depth 1 -b "${{ inputs.susfs_ref }}" https://gitlab.com/simonpunk/susfs4ksu.git ../susfs
+          ls ../susfs/kernel_patches
+          PATCH=$(ls ../susfs/kernel_patches/*.patch | head -1)
+          echo "selected: $PATCH"
+          patch -p1 --forward < "$PATCH"
+          grep -rn "KSU_SUSFS" fs/Makefile | head -2
 
       - name: Configure
         run: |
@@ -72,8 +87,9 @@ jobs:
       - name: Build Image
         run: |
           cd kernel
-          make O=out ARCH=arm64 LLVM=1 LOCALVERSION="${{ inputs.localversion }}" \
-            Image -j"$(nproc)" 2>&1 | tail -40
+          make O=out ARCH=arm64 LLVM=1 CC="ccache clang" LOCALVERSION="${{ inputs.localversion }}" \
+            Image -j"$(nproc)" 2>&1 | tail -30
+          ccache -s | tail -8
           ls -l out/arch/arm64/boot/Image
 
       - name: Upload artifact
