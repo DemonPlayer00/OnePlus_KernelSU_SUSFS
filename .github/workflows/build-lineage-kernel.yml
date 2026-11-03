@@ -152,7 +152,7 @@ jobs:
           cd kernel
           mkdir -p out
           make O=out ARCH=arm64 LLVM=1 gki_defconfig
-          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/oplus/pineapple_GKI.config
+          cat arch/arm64/configs/vendor/oplus/pineapple_GKI.config >> out/.config
           make O=out ARCH=arm64 LLVM=1 olddefconfig
           grep -E "CONFIG_KSU=|CONFIG_KSU_SUSFS=" out/.config || true
 
