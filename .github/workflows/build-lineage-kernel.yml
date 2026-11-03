@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel
-          key: ksrc-lineage-23.2-v1
+          key: ksrc-lineage-23.2-v2
           restore-keys: |
             ksrc-lineage-23.2-
 
@@ -115,6 +115,11 @@ jobs:
                   tail = "/".join(d.split("/")[-2:])
                   pick = next((c for c in cands if c.endswith(tail)), cands[0])
                   os.makedirs(os.path.dirname(d), exist_ok=True)
+                  if os.path.lexists(d):
+                      if os.path.islink(d):
+                          os.unlink(d)
+                      else:
+                          continue
                   os.symlink(pick, d)
                   print("LINK", d, "->", pick)
               else:
