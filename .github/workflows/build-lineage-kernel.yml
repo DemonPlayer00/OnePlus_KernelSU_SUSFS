@@ -40,13 +40,25 @@ jobs:
 
       - name: Apply SUSFS patches
         run: |
+          set -x
           cd kernel
-          git clone --depth 1 -b "${{ inputs.susfs_ref }}" https://gitlab.com/simonpunk/susfs4ksu.git ../susfs 2>/dev/null || \
-          git clone --depth 1 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs
-          ls ../susfs/kernel_patches | head -20
+          ok=0
+          for ref in "${{ inputs.susfs_ref }}" main v2.3.0; do
+            rm -rf ../susfs
+            if git clone --depth 1 -b "$ref" https://gitlab.com/simonpunk/susfs4ksu.git ../susfs 2>/dev/null; then
+              echo "cloned gitlab $ref"; ok=1; break
+            fi
+            if curl -fsSL --retry 3 "https://gitlab.com/simonpunk/susfs4ksu/-/archive/$ref/susfs4ksu-$ref.tar.gz" -o /tmp/susfs.tgz; then
+              mkdir -p ../susfs && tar -xzf /tmp/susfs.tgz -C ../susfs --strip-components=1 && echo "tarball $ref"; ok=1; break
+            fi
+          done
+          test "$ok" = 1 || { echo "cannot fetch susfs"; exit 1; }
+          ls ../susfs/kernel_patches | head -40
           PATCH=$(ls ../susfs/kernel_patches/*6.1*.patch 2>/dev/null | head -1)
-          echo "using $PATCH"
-          if [ -n "$PATCH" ]; then patch -p1 < "$PATCH"; else echo "no 6.1 patch found"; exit 1; fi
+          echo "selected patch: $PATCH"
+          test -n "$PATCH" || { echo "no 6.1 patch"; exit 1; }
+          patch -p1 --forward < "$PATCH" || true
+          grep -rn "KSU_SUSFS" fs/Makefile | head -3
 
       - name: Configure
         run: |
