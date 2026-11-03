@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bc bison flex libssl-dev libelf-dev \
-            python3 git curl zstd lld llvm clang ccache cpio rsync device-tree-compiler
+            python3 git curl zstd lld llvm clang ccache cpio rsync device-tree-compiler dwarves
 
       - name: Clone LineageOS kernel
         run: |
