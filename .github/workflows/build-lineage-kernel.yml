@@ -33,20 +33,11 @@ jobs:
           sudo apt-get install -y -qq build-essential bc bison flex libssl-dev libelf-dev \
             python3 git curl zstd lld llvm clang ccache cpio rsync device-tree-compiler
 
-      - name: Cache kernel source
-        uses: actions/cache@v4
-        with:
-          path: kernel
-          key: ksrc-lineage-23.2-v3
-          restore-keys: |
-            ksrc-lineage-23.2-
-
       - name: Clone LineageOS kernel
         run: |
-          if [ ! -d kernel/.git ]; then
-            git clone --depth 1 -b lineage-23.2 \
-              https://github.com/LineageOS/android_kernel_oneplus_sm8650 kernel
-          fi
+          rm -rf kernel
+          git clone --depth 1 -b lineage-23.2 \
+            https://github.com/LineageOS/android_kernel_oneplus_sm8650 kernel
           cd kernel && git rev-parse HEAD
 
       - name: Cache ccache
