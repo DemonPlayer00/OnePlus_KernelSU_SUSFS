@@ -1,0 +1,73 @@
+name: Build LineageOS giuliac kernel (KSU+SUSFS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      localversion:
+        description: 'LOCALVERSION pin (must match running kernel)'
+        default: '-g311084c0cf6d'
+      susfs_ref:
+        description: 'susfs4ksu ref'
+        default: 'master'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential bc bison flex libssl-dev libelf-dev \
+            python3 python3-pip git curl zstd lld llvm clang cpio rsync device-tree-compiler
+
+      - name: Clone LineageOS kernel
+        run: |
+          git clone --depth 1 -b lineage-23.2 \
+            https://github.com/LineageOS/android_kernel_oneplus_sm8650 kernel
+          cd kernel
+          git rev-parse HEAD
+
+      - name: Integrate KernelSU-Next
+        run: |
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next || \
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/master/kernel/setup.sh" | bash -s master
+          grep -n "KSU" Makefile | head -3
+
+      - name: Apply SUSFS patches
+        run: |
+          cd kernel
+          git clone --depth 1 -b "${{ inputs.susfs_ref }}" https://gitlab.com/simonpunk/susfs4ksu.git ../susfs 2>/dev/null || \
+          git clone --depth 1 https://gitlab.com/simonpunk/susfs4ksu.git ../susfs
+          ls ../susfs/kernel_patches | head -20
+          PATCH=$(ls ../susfs/kernel_patches/*6.1*.patch 2>/dev/null | head -1)
+          echo "using $PATCH"
+          if [ -n "$PATCH" ]; then patch -p1 < "$PATCH"; else echo "no 6.1 patch found"; exit 1; fi
+
+      - name: Configure
+        run: |
+          cd kernel
+          mkdir -p out
+          make O=out ARCH=arm64 LLVM=1 gki_defconfig
+          ./scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/oplus/pineapple_GKI.config
+          make O=out ARCH=arm64 LLVM=1 olddefconfig
+          grep -E "CONFIG_KSU=|CONFIG_KSU_SUSFS=" out/.config || true
+
+      - name: Build Image
+        run: |
+          cd kernel
+          make O=out ARCH=arm64 LLVM=1 LOCALVERSION="${{ inputs.localversion }}" \
+            Image -j"$(nproc)" 2>&1 | tail -40
+          ls -l out/arch/arm64/boot/Image
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: |
+            kernel/out/arch/arm64/boot/Image
+            kernel/out/.config
