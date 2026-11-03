@@ -157,7 +157,9 @@ jobs:
           cd kernel
           mkdir -p out
           cp ../configs/lineage-23.2-giuliac.config out/.config
-          ./scripts/config --file out/.config -d LOCALVERSION_AUTO -e KSU -e KSU_SUSFS
+          # MODULE_SCMVERSION changes struct module layout; stock modules were built with it.
+          sed -i '/^config MODULE_SCMVERSION/,/^config /{s/^\tdepends on LOCALVERSION_AUTO$/\t# dep removed for build/}' kernel/module/Kconfig || true
+          ./scripts/config --file out/.config -d LOCALVERSION_AUTO -e MODULE_SCMVERSION -e KSU -e KSU_SUSFS
           make O=out ARCH=arm64 LLVM=1 olddefconfig
           grep -E '^CONFIG_LOCALVERSION' out/.config
           grep -E "CONFIG_KSU=|CONFIG_KSU_SUSFS=" out/.config || true
