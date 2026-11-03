@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: kernel
-          key: ksrc-lineage-23.2-v2
+          key: ksrc-lineage-23.2-v3
           restore-keys: |
             ksrc-lineage-23.2-
 
@@ -104,6 +104,14 @@ jobs:
                           missing.append(full)
 
           unresolved = []
+          def ensure_parent(p):
+              if os.path.isdir(p):
+                  return True
+              if os.path.lexists(p):
+                  return False
+              os.makedirs(p, exist_ok=True)
+              return True
+
           for full in sorted(set(missing)):
               d = os.path.dirname(full)
               if os.path.exists(d):
@@ -115,7 +123,8 @@ jobs:
                   continue
               tail = "/".join(d.split("/")[-2:])
               pick = next((c for c in cands if c.endswith(tail)), cands[0])
-              os.makedirs(os.path.dirname(d), exist_ok=True)
+              if not ensure_parent(os.path.dirname(d)):
+                  continue
               if os.path.lexists(d):
                   if os.path.islink(d):
                       os.unlink(d)
