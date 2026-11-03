@@ -67,15 +67,16 @@ jobs:
               https://github.com/LineageOS/android_kernel_oneplus_sm8650-modules ext
           fi
           python3 - <<'PYEOF'
-          import os, re, shutil
+          import os, re
 
-          K = "kernel"
-          E = "ext"
+          K = os.path.abspath("kernel")
+          E = os.path.abspath("ext")
 
-          # index dirs by basename
           def index(root):
               idx = {}
               for dp, dns, fns in os.walk(root):
+                  if "/.git" in dp or "/out" in dp:
+                      continue
                   for d in dns:
                       idx.setdefault(d, []).append(os.path.join(dp, d))
               return idx
@@ -85,44 +86,39 @@ jobs:
 
           missing = []
           for dp, dns, fns in os.walk(K):
-              if ".git" in dp or "/out" in dp:
+              if "/.git" in dp or "/out" in dp:
                   continue
               for f in fns:
                   if not f.startswith("Kconfig"):
                       continue
-                  path = os.path.join(dp, f)
                   try:
-                      txt = open(path, encoding="utf-8", errors="ignore").read()
+                      txt = open(os.path.join(dp, f), encoding="utf-8", errors="ignore").read()
                   except Exception:
                       continue
                   for m in re.finditer(r'^\s*source\s+"([^"]+)"', txt, re.M):
                       src = m.group(1)
-                      if "$" in src:
+                      if "$" in src or src.startswith("/"):
                           continue
-                      full = os.path.normpath(os.path.join(dp, src))
+                      full = os.path.normpath(os.path.join(K, src))
                       if not os.path.exists(full):
                           missing.append(full)
 
-          missing = sorted(set(missing))
           unresolved = []
-          for full in missing:
-              base = os.path.basename(full)
+          for full in sorted(set(missing)):
+              d = os.path.dirname(full)
+              if os.path.exists(d):
+                  continue
+              base = os.path.basename(d)
               cands = kidx.get(base, []) + eidx.get(base, [])
-              cands = [c for c in cands if not os.path.exists(full)]
-              if len(cands) == 1:
-                  os.makedirs(os.path.dirname(full), exist_ok=True)
-                  os.symlink(os.path.abspath(cands[0]), full)
-                  print("LINK", full, "->", cands[0])
-              elif len(cands) > 1:
-                  # prefer path sharing last two components
-                  tail = "/".join(full.split("/")[-2:])
-                  pref = [c for c in cands if c.endswith(tail)]
-                  pick = pref[0] if pref else cands[0]
-                  os.makedirs(os.path.dirname(full), exist_ok=True)
-                  os.symlink(os.path.abspath(pick), full)
-                  print("LINK*", full, "->", pick)
+              cands = [c for c in cands if c != d]
+              if len(cands) >= 1:
+                  tail = "/".join(d.split("/")[-2:])
+                  pick = next((c for c in cands if c.endswith(tail)), cands[0])
+                  os.makedirs(os.path.dirname(d), exist_ok=True)
+                  os.symlink(pick, d)
+                  print("LINK", d, "->", pick)
               else:
-                  unresolved.append(full)
+                  unresolved.append(d)
 
           print("unresolved:", len(unresolved))
           for u in unresolved:
