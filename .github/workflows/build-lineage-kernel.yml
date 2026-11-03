@@ -20,7 +20,9 @@ env:
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_COMPILERCHECK: content
   CCACHE_SLOPPINESS: time_macros,include_file_ctime,include_file_mtime
-  CCACHE_MAXSIZE: 4G
+  CCACHE_MAXSIZE: 8G
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_NOHASHDIR: 1
 
 jobs:
   build:
@@ -40,11 +42,11 @@ jobs:
             https://github.com/LineageOS/android_kernel_oneplus_sm8650 kernel
           cd kernel && git rev-parse HEAD
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-v1
+          key: ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-${{ github.run_id }}
           restore-keys: |
             ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-
             ccache-
@@ -160,9 +162,16 @@ jobs:
         run: |
           cd kernel
           make O=out ARCH=arm64 LLVM=1 CC="ccache clang" LOCALVERSION="${{ inputs.localversion }}" \
-            Image -j"$(nproc)" 2>&1 | tail -30
-          ccache -s | tail -8
+            Image -j"$(nproc)"
+          ccache -s
           ls -l out/arch/arm64/boot/Image
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ inputs.localversion }}-${{ inputs.susfs_ref }}-${{ inputs.ksu_ref }}-${{ github.run_id }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
